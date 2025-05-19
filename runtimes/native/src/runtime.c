@@ -51,6 +51,8 @@ static bool firstFrame;
 static FILE* tickLogFile = NULL;
 static unsigned long long runtimeTicks = 0;
 
+static void logTick(const SerializedState* before, const InputState* input, const SerializedState* after);
+
 static void panic(const char *msg)
 {
     /* REVISIT: it's cleaner to raise a wasm trap */

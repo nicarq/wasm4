@@ -38,9 +38,20 @@ typedef struct {
     bool firstFrame;
 } SerializedState;
 
+typedef struct {
+    uint8_t gamepads[4];
+    int16_t mouseX;
+    int16_t mouseY;
+    uint8_t mouseButtons;
+} InputState;
+
 static Memory* memory;
 static w4_Disk* disk;
 static bool firstFrame;
+static FILE* tickLogFile = NULL;
+static unsigned long long runtimeTicks = 0;
+
+static void logTick(const SerializedState* before, const InputState* input, const SerializedState* after);
 
 static void panic(const char *msg)
 {
@@ -91,6 +102,13 @@ void w4_runtimeInit (uint8_t* memoryBytes, w4_Disk* diskBytes) {
     memory = (Memory*)memoryBytes;
     disk = diskBytes;
     firstFrame = true;
+
+    if (!tickLogFile) {
+        tickLogFile = fopen("tick.log", "wb");
+        if (!tickLogFile) {
+            perror("tick.log");
+        }
+    }
 
     // Set memory to initial state
     memset(memory, 0, 1 << 16);
@@ -278,6 +296,15 @@ void w4_runtimeTracef (const uint8_t* str, const void* stack) {
 }
 
 void w4_runtimeUpdate () {
+    SerializedState beforeState;
+    w4_runtimeSerialize(&beforeState);
+
+    InputState input;
+    memcpy(input.gamepads, memory->gamepads, sizeof(input.gamepads));
+    input.mouseX = w4_read16LE(&memory->mouseX);
+    input.mouseY = w4_read16LE(&memory->mouseY);
+    input.mouseButtons = memory->mouseButtons;
+
     if (firstFrame) {
         firstFrame = false;
         w4_wasmCallStart();
@@ -286,6 +313,7 @@ void w4_runtimeUpdate () {
     }
     w4_wasmCallUpdate();
     w4_apuTick();
+    runtimeTicks++;
     uint32_t palette[4] = {
         w4_read32LE(&memory->palette[0]),
         w4_read32LE(&memory->palette[1]),
@@ -293,6 +321,11 @@ void w4_runtimeUpdate () {
         w4_read32LE(&memory->palette[3]),
     };
     w4_windowComposite(palette, memory->framebuffer);
+
+    SerializedState afterState;
+    w4_runtimeSerialize(&afterState);
+
+    logTick(&beforeState, &input, &afterState);
 }
 
 int w4_runtimeSerializeSize () {
@@ -311,4 +344,22 @@ void w4_runtimeUnserialize (const void* src) {
     memcpy(memory, &state->memory, 1 << 16);
     memcpy(disk, &state->disk, sizeof(w4_Disk));
     firstFrame = state->firstFrame;
+}
+
+static void logTick(const SerializedState* before, const InputState* input, const SerializedState* after) {
+    printf("Tick %llu: GP[%u,%u,%u,%u] Mouse(%d,%d) B%u\n",
+        runtimeTicks,
+        input->gamepads[0], input->gamepads[1], input->gamepads[2], input->gamepads[3],
+        input->mouseX, input->mouseY, input->mouseButtons);
+
+    if (tickLogFile) {
+        fwrite(&runtimeTicks, sizeof(runtimeTicks), 1, tickLogFile);
+        fwrite(before, sizeof(*before), 1, tickLogFile);
+        fwrite(input->gamepads, sizeof(uint8_t), 4, tickLogFile);
+        fwrite(&input->mouseX, sizeof(input->mouseX), 1, tickLogFile);
+        fwrite(&input->mouseY, sizeof(input->mouseY), 1, tickLogFile);
+        fwrite(&input->mouseButtons, sizeof(input->mouseButtons), 1, tickLogFile);
+        fwrite(after, sizeof(*after), 1, tickLogFile);
+        fflush(tickLogFile);
+    }
 }
